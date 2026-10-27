@@ -4,6 +4,8 @@ A thread-safe Fixed Window Rate Limiter implemented in Kotlin. Features configur
 
 # Fixed Window Rate Limiter in Kotlin
 
+https://play.kotlinlang.org/embed?short=tceE3dEyB&theme=darcula
+
 A simple, beginner-friendly implementation of the Fixed Window Rate Limiting Algorithm using Kotlin.
 
 This project explores how rate limiting works, how to structure the implementation using clean code principles, and how to test time-dependent behavior.

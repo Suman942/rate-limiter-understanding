@@ -1,0 +1,101 @@
+/**
+ * You can edit, run, and share this code.
+ * play.kotlinlang.org
+ */
+import java.util.concurrent.ConcurrentHashMap
+import java.util.ArrayDeque
+fun main() {
+	val config = RateLimiterConfig(maxRequest = 3,windowSizeInMillis = 1000L )
+    val store = InMemoryWindowStore<ArrayDeque<Long>>()
+    
+    val rateLimiter = SlidingWindowLogRateLimiter(config,store,SystemClock)
+    val handler = RequestHandler(rateLimiter)
+    
+    repeat(5){i->
+        println("Request ${i+1}: ${handler.handle("user1")}")
+    }
+    Thread.sleep(1000)
+	println("Request after reset: ${handler.handle("user1")}")
+}
+
+//models
+data class RateLimiterConfig(
+    val maxRequest:Int,
+    val windowSizeInMillis:Long
+)
+
+
+data class Window(
+    val count:Int,
+    val windowStart:Long
+) // For FixedWindow ALgorithm
+
+//storage
+interface WindowStore<S>{
+    fun compute(clientId:String,s:(S?) -> S) : S
+}
+
+class InMemoryWindowStore<S:Any>:WindowStore<S>{
+   val windowMap = ConcurrentHashMap<String,S>()
+   override fun compute(clientId:String,update:(S?) -> S) : S {
+       return windowMap.compute(clientId){_,existing->
+         update(existing)
+       }!!
+   }
+}
+
+// clock
+interface Clock{
+    fun nowMillis(): Long
+}
+
+object SystemClock : Clock{
+    override fun nowMillis() : Long = System.currentTimeMillis()
+}
+
+// limiter 
+interface RateLimiter{
+    fun allowRequest(clientId:String) : Boolean
+}
+
+// handler
+class RequestHandler(val rateLimiter:RateLimiter){
+    fun handle(clientId:String): String{
+        return if(rateLimiter.allowRequest(clientId)) "OK"
+        else "429 too many request"
+    }
+}
+
+
+
+// algorithm 
+class SlidingWindowLogRateLimiter(
+    private val config : RateLimiterConfig,
+    private val storage : WindowStore<ArrayDeque<Long>>,
+    private val clock : Clock
+) : RateLimiter{
+    
+    override fun allowRequest(clientId:String):Boolean{
+        var isAllowed = false
+        val now = clock.nowMillis()
+        val windowStart = now  - config.windowSizeInMillis
+        
+        storage.compute(clientId){existing->
+            val log = existing ?: ArrayDeque<Long>()
+            // remove the expired timestamp -> all expired timestamp will exist at the first as its growing higher
+            while(log.isNotEmpty() && log.first() <= windowStart){
+                log.removeFirst()
+            }
+            
+            // check request
+            if(log.size < config.maxRequest){
+                log.addLast(now)
+                isAllowed = true
+            }
+            log
+        }
+        
+        return isAllowed
+    }
+}
+

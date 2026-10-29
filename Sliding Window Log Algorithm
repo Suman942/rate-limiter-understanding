@@ -25,11 +25,6 @@ data class RateLimiterConfig(
 )
 
 
-data class Window(
-    val count:Int,
-    val windowStart:Long
-) // For FixedWindow ALgorithm
-
 //storage
 interface WindowStore<S>{
     fun compute(clientId:String,s:(S?) -> S) : S

@@ -1,0 +1,122 @@
+/**
+ * You can edit, run, and share this code.
+ * play.kotlinlang.org
+ */
+import java.util.concurrent.ConcurrentHashMap
+import java.util.ArrayDeque
+fun main() {
+	val config = RateLimiterConfig(maxRequest = 3,windowSizeInMillis = 1000L )
+    val store = InMemoryWindowStore<SlidingWindowCounter>()
+    
+    val fixedRateLimiter = SlidingWindowCounderRateLimiter(config,store,SystemClock)
+    val handler = RequestHandler(fixedRateLimiter)
+    
+    repeat(5){i->
+        println("Request ${i+1}: ${handler.handle("user1")}")
+    }
+    Thread.sleep(1000)
+	println("Request after reset: ${handler.handle("user1")}")
+}
+
+//models
+data class RateLimiterConfig(
+    val maxRequest:Int,
+    val windowSizeInMillis:Long
+)
+
+
+data class SlidingWindowCounter(
+    val windowStart:Long,
+    val previousCount :Int,
+    val currentCount:Int
+)// For Sliding Window Counter Algorithm
+
+//storage
+interface WindowStore<S>{
+    fun compute(clientId:String,s:(S?) -> S) : S
+}
+
+class InMemoryWindowStore<S:Any>:WindowStore<S>{
+   val windowMap = ConcurrentHashMap<String,S>()
+   override fun compute(clientId:String,update:(S?) -> S) : S {
+       return windowMap.compute(clientId){_,existing->
+         update(existing)
+       }!!
+   }
+}
+
+// clock
+interface Clock{
+    fun nowMillis(): Long
+}
+
+object SystemClock : Clock{
+    override fun nowMillis() : Long = System.currentTimeMillis()
+}
+
+// limiter 
+interface RateLimiter{
+    fun allowRequest(clientId:String) : Boolean
+}
+
+// handler
+class RequestHandler(val rateLimiter:RateLimiter){
+    fun handle(clientId:String): String{
+        return if(rateLimiter.allowRequest(clientId)) "OK"
+        else "429 too many request"
+    }
+}
+
+
+
+class SlidingWindowCounderRateLimiter(
+    private val config:RateLimiterConfig,
+    private val storage:WindowStore<SlidingWindowCounter>,
+    private val clock:Clock
+):RateLimiter{
+    override fun allowRequest(clientId:String):Boolean{
+        var isAllowed = false
+        val now = clock.nowMillis()
+        val windowSize = config.windowSizeInMillis
+        val currentStart = now - (now % windowSize)
+        
+        storage.compute(clientId){existing->
+            //1. roll the state forward so it matches the current window
+            val state = roll(existing,currentStart,windowSize)
+            
+            //2. estimate the how many request fall in the sliding window
+            val elapsed = now - currentStart
+            val weight = (windowSize - elapsed).toDouble() / windowSize
+            val estimate = state.previousCount * weight + state.currentCount
+            
+            //3. allow only if one request still fits
+            if(estimate + 1 <= config.maxRequest){
+                isAllowed = true
+                state.copy(currentCount = state.currentCount + 1)
+            }else{
+                state
+            }
+        }
+        return isAllowed
+    }
+    
+    private fun roll(existing:SlidingWindowCounter?,
+                     currentStart:Long,
+                     windowSize:Long
+             ):SlidingWindowCounter = when{
+        // first call ever
+        existing == null -> SlidingWindowCounter(windowStart = currentStart,currentCount = 0,previousCount = 0)
+       
+        // still inside the same fixed window
+        existing.windowStart == currentStart -> existing
+        
+        // exactly one window later : current becomes previous
+        existing.windowStart == currentStart - windowSize -> SlidingWindowCounter(windowStart = currentStart ,
+                                                                                  currentCount = 0,
+                                                                                  previousCount = existing.currentCount)
+        
+        // idle for 2+ windows: old data is irrelevant
+        else -> SlidingWindowCounter(windowStart = currentStart,currentCount = 0,previousCount = 0)
+        
+    }
+}
